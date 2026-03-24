@@ -1,0 +1,16 @@
+[workspace]
+authors = ["Davide Frova <frovad@usi.ch>"]
+channels = ["robostack-staging", "conda-forge"]
+name = "frank"
+platforms = ["osx-arm64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = "==3.10.13"
+ros-humble-desktop = ">=0.10.0,<0.11"
+colcon-common-extensions = ">=0.3.0,<0.4"
+
+[activation.env]
+ROS_LOCALHOST_ONLY="1"
