@@ -1,6 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from turtlesim.msg import Pose
+from collections import deque
 
 
 class WriterNode(Node):
@@ -9,6 +10,12 @@ class WriterNode(Node):
         super().__init__("writer")
 
         self.get_logger().info("Writer node has been started")
+
+        # We will save the current turtle1 pose, which will be updated by the pose_callback
+        self.current_pose = None
+
+        # Queue to store the relative transforms to the current position that will form the path to be followed by the turtle.
+        self.goals_queue = deque()
 
         # Create a subscriber to the topic '/turtle1/pose' which will call self.pose_callback
         # every time there is a new message in the topic of type Pose
@@ -20,7 +27,7 @@ class WriterNode(Node):
 
     def pose_callback(self, msg):
         """Callback called every time a new Pose message is received by the subscriber."""
-        self.get_logger().info(f"Received pose of turtle1: msg={msg}")
+        # self.get_logger().info(f"Received pose of turtle1: msg={msg}")
 
 
 def main():

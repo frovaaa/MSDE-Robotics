@@ -7,14 +7,15 @@
   <maintainer email="frovad@usi.ch">davide</maintainer>
   <license>Apache-2.0</license>
 
-  <buildtool_depend>rosidl_default_generators</buildtool_depend>
-  <depend>action_msgs</depend>
-  <member_of_group>rosidl_interface_packages</member_of_group>
-
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
+
+  <depend>action_usi_angry_turtle_interfaces</depend>
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>turtlesim</depend>
 
   <export>
     <build_type>ament_python</build_type>

@@ -1,0 +1,9 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/frank/.pixi/envs/default/bin/python",
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/frank/install/usi_angry_turtle/lib/python3.10/site-packages",
+    "${workspaceFolder}/frank/install/action_usi_angry_turtle_interfaces/lib/python3.10/site-packages",
+    "${workspaceFolder}/frank/src"
+],
+"python-envs.defaultEnvManager": "ms-python.python:system"
+}

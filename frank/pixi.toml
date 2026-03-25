@@ -6,11 +6,14 @@ platforms = ["osx-arm64"]
 version = "0.1.0"
 
 [tasks]
+build = "colcon build --symlink-install --cmake-args -DPython3_ROOT_DIR=$PIXI_PROJECT_ROOT/.pixi/envs/default -DPython3_EXECUTABLE=$PIXI_PROJECT_ROOT/.pixi/envs/default/bin/python -DPython3_FIND_STRATEGY=LOCATION -DPython3_FIND_FRAMEWORK=NEVER"
+build-clean = "rm -rf build install log && colcon build --symlink-install --cmake-args -DPython3_ROOT_DIR=$PIXI_PROJECT_ROOT/.pixi/envs/default -DPython3_EXECUTABLE=$PIXI_PROJECT_ROOT/.pixi/envs/default/bin/python -DPython3_FIND_STRATEGY=LOCATION -DPython3_FIND_FRAMEWORK=NEVER"
 
 [dependencies]
 python = "==3.10.13"
 ros-humble-desktop = ">=0.10.0,<0.11"
 colcon-common-extensions = ">=0.3.0,<0.4"
+numpy = ">=1.26.4,<2"
 
 [activation.env]
 ROS_LOCALHOST_ONLY="1"

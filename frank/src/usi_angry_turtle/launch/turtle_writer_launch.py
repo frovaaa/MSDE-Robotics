@@ -19,5 +19,12 @@ def generate_launch_description():
                 name="writer",
                 ros_arguments=["--log-level", "info"],
             ),
+            Node(
+                package="usi_angry_turtle",
+                namespace="usi_angry_turtle",
+                executable="move2goal_node",
+                name="move2goal",
+                ros_arguments=["--log-level", "info"],
+            )
         ]
     )
