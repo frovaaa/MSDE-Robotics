@@ -7,6 +7,10 @@
   <maintainer email="frovad@usi.ch">davide</maintainer>
   <license>Apache-2.0</license>
 
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
+  <depend>action_msgs</depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
