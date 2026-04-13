@@ -1,13 +1,14 @@
 import time
 
 import rclpy
+import random
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from turtlesim.msg import Pose
 from collections import deque
 from enum import Enum
 
-from turtlesim.srv import SetPen, Kill
+from turtlesim.srv import SetPen, Kill, Spawn
 
 from action_usi_angry_turtle_interfaces.action import MoveToGoal
 
@@ -69,6 +70,8 @@ class WriterNode(Node):
         self.pen_client = self.create_client(SetPen, "/turtle1/set_pen")
         # We also need a service to kill turtle2
         self.kill_client = self.create_client(Kill, "/kill")
+        # Spawn client to when we add turtle2
+        self.spawn_client = self.create_client(Spawn, "/spawn")
 
         # Create a subscriber to the topic '/turtle1/pose' which will call self.pose_callback
         # every time there is a new message in the topic of type Pose
@@ -184,18 +187,6 @@ class WriterNode(Node):
         self.state = State.RETURNING
         self.active_goal_type = ActiveGoalType.RETURNING
         self._set_pen(self.PEN_OFF)
-
-        if self.last_writing_position is not None:
-            goal = MoveToGoal.Goal()
-            goal.x = self.last_writing_position.x
-            goal.y = self.last_writing_position.y
-            goal.tolerance = 0.1
-
-            send_goal_future = self._action_client.send_goal_async(
-                goal,
-                feedback_callback=self._feedback_callback,
-            )
-            send_goal_future.add_done_callback(self._goal_response_callback)
 
     def _cancel_done_callback(self, future):
         """Callback executed when the writing goal is canceled to begin chasing."""
@@ -437,7 +428,57 @@ class WriterNode(Node):
 
         request = Kill.Request()
         request.name = name
-        self.kill_client.call_async(request)
+        future = self.kill_client.call_async(request)
+        future.add_done_callback(self._kill_done_callback)
+
+    def _kill_done_callback(self, future):
+        """Called when turtle2 has been killed. Now respawn it randomly."""
+        try:
+            future.result()
+            self.get_logger().info("Turtle2 killed successfully.")
+        except Exception as e:
+            self.get_logger().error(f"Failed to kill turtle2: {e}")
+            return
+
+        self._spawn_turtle_random("turtle2")
+
+    def _spawn_turtle_random(self, name):
+        """Spawn a turtle with the given name in a random valid turtlesim position."""
+        if not self.spawn_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().error("Spawn service not available!")
+            return
+
+        request = Spawn.Request()
+        request.x = random.uniform(1.0, 10.0)
+        request.y = random.uniform(1.0, 10.0)
+        request.theta = random.uniform(0.0, 6.28)
+        request.name = name
+
+        future = self.spawn_client.call_async(request)
+        future.add_done_callback(self._spawn_done_callback)
+
+    def _spawn_done_callback(self, future):
+        """Called when turtle2 has been respawned. Now return to the writing position."""
+        try:
+            response = future.result()
+            self.get_logger().info(
+                f"Turtle respawned successfully with name: {response.name}"
+            )
+        except Exception as e:
+            self.get_logger().error(f"Failed to spawn turtle2: {e}")
+            return
+
+        if self.last_writing_position is not None:
+            goal = MoveToGoal.Goal()
+            goal.x = self.last_writing_position.x
+            goal.y = self.last_writing_position.y
+            goal.tolerance = 0.1
+
+            send_goal_future = self._action_client.send_goal_async(
+                goal,
+                feedback_callback=self._feedback_callback,
+            )
+            send_goal_future.add_done_callback(self._goal_response_callback)
 
 
 def main():
