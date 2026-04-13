@@ -93,6 +93,13 @@ class WriterNode(Node):
         # Distance in meters at which the turtle2 will be killed
         self.k_kill = 0.5
 
+        # Adv task 2 | intercept turtle2
+        self.prev_turtle2_pose = None
+        self.prev_turtle2_time = None
+        self.turtle2_dir_x = 0.0
+        self.turtle2_dir_y = 0.0
+        self.k_intercept = 0.3
+
         # Initialize the state machine in the WRITING state
         self.state = State.WRITING
         self.active_goal_type = ActiveGoalType.WRITING
@@ -117,9 +124,30 @@ class WriterNode(Node):
 
     def turtle2_pose_callback(self, msg):
         """Callback called every time a new Pose message is received from the topic /turtle2/pose."""
+        # We record the time for the turtle2 pos prediction
+        now = time.time()
+
         self.turtle2_pose = msg
         self.turtle2_pose.x = round(self.turtle2_pose.x, 4)
         self.turtle2_pose.y = round(self.turtle2_pose.y, 4)
+
+        # We compute the speed and direction of turtle2 to be able to predict its future position
+        if self.prev_turtle2_pose is not None and self.prev_turtle2_time is not None:
+            dt = now - self.prev_turtle2_time
+            if dt > 1e-6:  # To avoid division by zero
+                # We compute the difference in position from the previous to the current to get the speed
+                dx = self.turtle2_pose.x - self.prev_turtle2_pose.x
+                dy = self.turtle2_pose.y - self.prev_turtle2_pose.y
+
+                distance_moved = (dx**2 + dy**2) ** 0.5
+                self.turtle2_speed = distance_moved / dt
+
+                if distance_moved > 1e-6:
+                    self.turtle2_dir_x = dx / distance_moved
+                    self.turtle2_dir_y = dy / distance_moved
+
+        self.prev_turtle2_pose = self.turtle2_pose
+        self.prev_turtle2_time = now
 
         if self.current_pose is not None:
             distance = (
@@ -230,11 +258,32 @@ class WriterNode(Node):
         if self.state != State.ANGRY:
             return
 
+        # OLD FOLLOW APPROACH, we just go to the current position of turtle2
         # We send a goal to move to the current position of the second turtle
+        # goal = MoveToGoal.Goal()
+        # goal.x = self.turtle2_pose.x
+        # goal.y = self.turtle2_pose.y
+        # goal.tolerance = 0.5
+
+        # New intercept approach
+        distance_to_target = (
+            (self.current_pose.x - self.turtle2_pose.x) ** 2
+            + (self.current_pose.y - self.turtle2_pose.y) ** 2
+        ) ** 0.5
+
+        m = self.k_intercept * self.turtle2_speed * distance_to_target
+
+        intercept_x = self.turtle2_pose.x + m * self.turtle2_dir_x
+        intercept_y = self.turtle2_pose.y + m * self.turtle2_dir_y
+
         goal = MoveToGoal.Goal()
-        goal.x = self.turtle2_pose.x
-        goal.y = self.turtle2_pose.y
+        goal.x = intercept_x
+        goal.y = intercept_y
         goal.tolerance = 0.5
+
+        # Then we clamp to the turtlesim bounds so we don't aim for a position outside the boundaries
+        intercept_x = max(0.5, min(10.5, intercept_x))
+        intercept_y = max(0.5, min(10.5, intercept_y))
 
         self.active_goal_type = ActiveGoalType.CHASING
 
