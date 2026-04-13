@@ -30,3 +30,6 @@ It is important to spawn the turtle with the name **turtle2** as the `usi_angry_
 
 Then to control it via teleop in the terminal, run the following command:
 `ros2 run turtlesim turtle_teleop_key --ros-args -r /turtle1/cmd_vel:=/turtle2/cmd_vel`
+
+If for any reason the zip is not working, there is the correct/complete environment available in the following git repository:
+[https://github.com/frovaaa/MSDE-Robotics](https://github.com/frovaaa/MSDE-Robotics)
