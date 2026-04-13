@@ -97,7 +97,6 @@ class WriterNode(Node):
         self.state = State.WRITING
         self.active_goal_type = ActiveGoalType.WRITING
 
-        # TODO: Change Start to write USI
         self.get_logger().info("Writing USI")
         start_pose = Pose()
         start_pose.x = 1.0
@@ -417,7 +416,6 @@ class WriterNode(Node):
 
         # We assume that the pen request will work,
         # so we don't wait for the response and we don't set a callback for it
-        # TODO: Might change
         self.pen_client.call_async(pen_request)
 
     def _kill_turtle(self, name):
