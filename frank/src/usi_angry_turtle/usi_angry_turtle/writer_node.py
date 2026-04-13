@@ -21,6 +21,14 @@ class State(Enum):
     ANGRY = "ANGRY"
     RETURNING = "RETURNING"
 
+class ActiveGoalType(Enum):
+    """
+    Class that defines the type of the active goal, to be able to distinguish if the current active goal is a writing goal or a chasing goal.
+    This is useful to decide the behavior of the node when a new goal is received while we are in the ANGRY state, because if we are chasing the second turtle and we receive a new writing goal, we want to ignore it until we have finished chasing the second turtle and we are back to the last writing position.
+    """
+
+    WRITING = "WRITING"
+    CHASING = "CHASING"
 
 class WriterNode(Node):
     """
@@ -50,6 +58,7 @@ class WriterNode(Node):
         # Here we create the action client that will send the goals to the move2goal action server
         self._action_client = ActionClient(self, MoveToGoal, "move_to_goal")
         self._active_goal_handle = None
+        self.goal_in_progress = False
 
         # Pen service client to be able to change color and lift the pen
         self.pen_client = self.create_client(SetPen, "/turtle1/set_pen")
@@ -60,11 +69,18 @@ class WriterNode(Node):
             Pose, "/turtle1/pose", self.pose_callback, 10
         )
 
+        # We also create a subscriber to the topic '/turtle2/pose' to be able to detect the second turtle and chase it when detected
+        self.turtle2_pose = None
+        self.turtle2_subscriber = self.create_subscription(
+            Pose, "/turtle2/pose", self.turtle2_pose_callback, 10
+        )
+
         # Distance in meters at which the turtle will start chasing the second turtle when detected
         self.k_chase = 2.0
 
         # Initialize the state machine in the WRITING state
         self.state = State.WRITING
+        self.active_goal_type = ActiveGoalType.WRITING
 
         # TODO: Change Start to write USI
         self.get_logger().info("Writing USI")
@@ -85,6 +101,80 @@ class WriterNode(Node):
         self.current_pose.x = round(self.current_pose.x, 4)
         self.current_pose.y = round(self.current_pose.y, 4)
 
+    def turtle2_pose_callback(self, msg):
+        """Callback called every time a new Pose message is received from the topic /turtle2/pose."""
+        self.turtle2_pose = msg
+        self.turtle2_pose.x = round(self.turtle2_pose.x, 4)
+        self.turtle2_pose.y = round(self.turtle2_pose.y, 4)
+
+        if self.state == State.WRITING and self.current_pose is not None:
+            distance = (
+                (self.current_pose.x - self.turtle2_pose.x) ** 2
+                + (self.current_pose.y - self.turtle2_pose.y) ** 2
+            ) ** 0.5
+
+            if distance < self.k_chase:
+                self.get_logger().warn(
+                    f"Second turtle detected at distance {round(distance, 4)}! Starting to chase it..."
+                )
+                # turn off the pen
+                self._set_pen(self.PEN_OFF)
+                # we set the active goal type to CHASING
+                self.active_goal_type = ActiveGoalType.CHASING
+
+                # We cancel the current goal,
+                # when it is succesfully canceled, the callback will change the state to ANGRY
+                if self._active_goal_handle is not None:
+                    cancel_future = self._active_goal_handle.cancel_goal_async()
+                    cancel_future.add_done_callback(self._cancel_done_callback)
+                else:
+                    self.get_logger().warn(
+                        "No active goal handle to cancel, but we detected the second turtle. This should not happen."
+                    )
+                    # We change state anyway to start chasing the second turtle, even if we couldn't cancel the current goal for some reason
+                    self.state = State.ANGRY
+
+    def _cancel_done_callback(self, future):
+        """Callback executed when the cancel goal request is completed."""
+        cancel_response = future.result()
+        if cancel_response.return_code == 0:
+            self.get_logger().warn("Current goal successfully canceled.")
+        else:
+            self.get_logger().warn(
+                f"Failed to cancel the current goal. Return code: {cancel_response.return_code}"
+            )
+        # We change state to start chasing the second turtle even if we couldn't cancel the current goal for some reason
+        self.state = State.ANGRY
+        # We start a timer to keep sending goals to chase the second turtle until we are close enough to it
+        self.chase_timer = self.create_timer(0.2, self._chase_turtle2)
+
+    def _chase_turtle2(self):
+        """Function called by the timer to keep sending goals to chase the second turtle until we are close enough to it."""
+        if self.turtle2_pose is None:
+            self.get_logger().warn("Turtle2 pose is not available, cannot chase it.")
+            return
+
+        if self.current_pose is None:
+            self.get_logger().warn(
+                "Current pose is not available, cannot chase the second turtle."
+            )
+            return
+        
+        if self.goal_in_progress:
+            self.get_logger().info("Goal in progress, waiting to send the next chasing goal...")
+            return
+
+        # We send a goal to move to the current position of the second turtle
+        goal = MoveToGoal.Goal()
+        goal.x = self.turtle2_pose.x
+        goal.y = self.turtle2_pose.y
+        goal.tolerance = 0.5
+
+        self.active_goal_type = ActiveGoalType.CHASING
+
+        send_goal_future = self._action_client.send_goal_async(goal)
+        send_goal_future.add_done_callback(self._goal_response_callback)
+
     def start_queue(self):
         """Starts sending the goals in the queue to the move2goal action server."""
         if not self.goals_queue:
@@ -104,6 +194,9 @@ class WriterNode(Node):
         pen = None
         x, y = None, None
         entry = self.goals_queue.popleft()
+        self.last_entry = entry
+        # TODO: change to a deep copy
+        self.last_writing_position = self.current_pose
 
         if len(entry) == 2:
             x, y = entry
@@ -125,6 +218,8 @@ class WriterNode(Node):
 
         self.get_logger().info(f"Sending next goal: x={goal.x}, y={goal.y}")
 
+        self.active_goal_type = ActiveGoalType.WRITING
+
         send_goal_future = self._action_client.send_goal_async(
             goal,
             feedback_callback=self._feedback_callback,
@@ -141,6 +236,7 @@ class WriterNode(Node):
 
         # We set the active goal handle to be able to cancel the goal if needed
         self._active_goal_handle = goal_handle
+        self.goal_in_progress = True
         self.get_logger().info(
             "Goal accepted by the action server, waiting for result..."
         )
@@ -153,18 +249,20 @@ class WriterNode(Node):
         result_msg = future.result().result
         status = future.result().status
 
+        self.goal_in_progress = False
+
         self.get_logger().info(
             f"Goal finished: success={result_msg.success}, "
             f"final_error={round(result_msg.final_error, 4)}, status={status}"
         )
 
-        # If the waypoint was successfully reached, we send the next one in the queue
-        if result_msg.success:
-            self._send_next_goal()
-        else:
-            self.get_logger().warn(
-                "Failed to reach the goal, not sending the next one in the queue."
-            )
+        if self.active_goal_type == ActiveGoalType.WRITING:
+            if self.state == State.WRITING and result_msg.success:
+                self.get_logger().info("Successfully reached the writing goal, sending the next one in the queue...")
+                self._send_next_goal()
+        elif self.active_goal_type == ActiveGoalType.CHASING:
+            # we do not resume writing
+            pass
 
     def _feedback_callback(self, feedback_msg):
         """Callback executed when feedback is received from the movement action server."""

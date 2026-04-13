@@ -24,7 +24,7 @@ def generate_launch_description():
                 namespace="usi_angry_turtle",
                 executable="move2goal_node",
                 name="move2goal",
-                ros_arguments=["--log-level", "info"],
+                ros_arguments=["--log-level", "warn"],
             )
         ]
     )

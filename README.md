@@ -17,3 +17,11 @@ This starts the following nodes:
 - `usi_angry_turtle`
     - `move2goal_node` which is the ActionServer that receives the goals and moves the turtle accordingly
     - `writer_node` which is the ActionClient that sends the goals to the `move2goal_node` to write "USI"
+
+
+To generate a new turtle
+`ros2 service call /spawn turtlesim/srv/Spawn "{x: 5.0, y: 5.0, theta: 0.0, name: 'turtle2'}"`
+
+Then to control it via teleop in the terminal
+
+`ros2 run turtlesim turtle_teleop_key --ros-args -r /turtle1/cmd_vel:=/turtle2/cmd_vel`
