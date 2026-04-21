@@ -17,6 +17,9 @@ class State(Enum):
     APPROACHING_WALL = 2  # Spotted a wall, we approach slowly
     CENTERING_WALL = 3  # Reached the wall, we rotate to center it
     DONE_CENTERED_FORWARD = 4  # Wall is centered, we stop
+    TURNING_AWAY = 5  # We turn 180 degrees away from the wall
+    MOVING_2M_AWAY = 6  # We move forward for 2 meters away from the wall using odometry
+    DONE = 7  # We are done, we can stop and do nothing
 
 
 class ControllerNode(Node):
@@ -31,6 +34,9 @@ class ControllerNode(Node):
         self.min_dist_from_wall = (
             0.2  # [m] minimum distance from the wall to consider it as "close enough"
         )
+
+        self.turn_start_yaw = None
+        self.turn_goal = None  # Radians to rotate
 
         self.state = State.SEARCHING_WALL
 
@@ -93,7 +99,7 @@ class ControllerNode(Node):
         self.odom_pose = msg.pose.pose
         self.odom_velocity = msg.twist.twist
 
-        pose2d = self.pose3d_to_2d(self.odom_pose)
+        self.pose2d = self.pose3d_to_2d(self.odom_pose)
 
         # self.get_logger().info(
         #     "odometry: received pose (x: {:.2f}, y: {:.2f}, theta: {:.2f})".format(
@@ -141,7 +147,7 @@ class ControllerNode(Node):
             and self.tof_sees_something(fr)
             and math.isclose(fl, fr, abs_tol=0.01)
         ):
-            self.state = State.DONE_CENTERED_FORWARD
+            self.state = State.TURNING_AWAY
             self.get_logger().info("Wall is centered, stopping...")
             return self.make_cmd_vel(0.0, 0.0)
 
@@ -157,6 +163,56 @@ class ControllerNode(Node):
 
         return self.make_cmd_vel(0.0, side * 0.1)
 
+    def angle_diff(self, a: float, b: float) -> float:
+        return (a - b + math.pi) % (2 * math.pi) - math.pi
+
+    def turn_in_place(self, angle_rad):
+        if self.pose2d is None:
+            return self.make_cmd_vel(0.0, 0.0)
+
+        _, _, current_yaw = self.pose2d
+
+        # 1. Initialize target once
+        if self.turn_goal is None:
+            target_yaw = current_yaw + angle_rad
+            self.turn_goal = (target_yaw + math.pi) % (2 * math.pi) - math.pi
+            self.get_logger().info(f"Target Yaw: {self.turn_goal:.2f}")
+
+        # 2. Calculate distance to goal
+        diff = self.angle_diff(self.turn_goal, current_yaw)
+        self.get_logger().info(
+            f"Current Yaw: {current_yaw:.2f} | Diff to Goal: {diff:.2f} | Goal: {self.turn_goal:.2f}"
+        )
+
+        # 3. Stop condition
+        if abs(diff) <= 0.05:
+            self.get_logger().info("Finished turning 180 degrees!")
+            self.turn_goal = None
+
+            # Transition to your next state
+            self.state = State.DONE
+            return self.make_cmd_vel(0.0, 0.0)
+
+        # 4. Control logic
+        # If we are far away (> 0.5 rad / ~28 degrees), force a left turn
+        # to cleanly escape the 180-degree mathematical boundary.
+        if abs(diff) > 0.5:
+            self.get_logger().info(
+                f"Turning in place | diff: {diff:.2f} (far from goal, using fixed turn speed)"
+            )
+            turn_speed = 0.3
+
+        # If we are close, switch to proportional control.
+        # This naturally slows the robot down as it approaches the target,
+        # and crucially, if it overshoots (diff becomes negative), it will automatically reverse!
+        else:
+            self.get_logger().info(
+                f"Turning in place | diff: {diff:.2f} (close to goal, using proportional control)"
+            )
+            turn_speed = 0.8 * diff
+
+        return self.make_cmd_vel(0.0, turn_speed)
+
     def go_to_wall(self):
         fl = self.tof["fl"]
         fr = self.tof["fr"]
@@ -171,7 +227,14 @@ class ControllerNode(Node):
         if self.state == State.CENTERING_WALL:
             return self.center_with_wall(fl, fr)
 
-        if self.state == State.DONE_CENTERED_FORWARD:
+        if self.state == State.TURNING_AWAY:
+            return self.turn_in_place(math.pi)
+
+        if self.state == State.MOVING_2M_AWAY:
+            # For now we stay still
+            return self.make_cmd_vel(0.0, 0.0)
+
+        if self.state == State.DONE:
             return self.make_cmd_vel(0.0, 0.0)
 
         self.get_logger().warn(f"Unknown wall state: {self.state}")
@@ -179,10 +242,10 @@ class ControllerNode(Node):
 
     def pose3d_to_2d(self, pose3):
         quaternion = (
+            pose3.orientation.w,
             pose3.orientation.x,
             pose3.orientation.y,
             pose3.orientation.z,
-            pose3.orientation.w,
         )
 
         roll, pitch, yaw = euler_from_quaternion(quaternion)
