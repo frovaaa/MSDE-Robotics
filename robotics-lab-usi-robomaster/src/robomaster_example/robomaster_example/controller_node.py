@@ -37,6 +37,9 @@ class ControllerNode(Node):
 
         self.turn_start_yaw = None
         self.turn_goal = None  # Radians to rotate
+        self.move_start_pose = (
+            None  # Starting pose for the single axes forward/backward movement
+        )
 
         self.state = State.SEARCHING_WALL
 
@@ -190,7 +193,7 @@ class ControllerNode(Node):
             self.turn_goal = None
 
             # Transition to your next state
-            self.state = State.DONE
+            self.state = State.MOVING_2M_AWAY
             return self.make_cmd_vel(0.0, 0.0)
 
         # 4. Control logic
@@ -213,6 +216,40 @@ class ControllerNode(Node):
 
         return self.make_cmd_vel(0.0, turn_speed)
 
+    def move_forward_distance(self, distance_m):
+        if self.pose2d is None:
+            return self.make_cmd_vel(0.0, 0.0)
+
+        # 1. Initialize the starting position ONLY ONCE
+        if self.move_start_pose is None:
+            self.move_start_pose = self.pose2d
+            self.get_logger().info(
+                f"Locked start position: x={self.pose2d[0]:.2f}, y={self.pose2d[1]:.2f}"
+            )
+
+        # 2. Calculate true Euclidean distance traveled (handling both X and Y movement)
+        start_x, start_y, _ = self.move_start_pose
+        curr_x, curr_y, _ = self.pose2d
+
+        distance_traveled = math.hypot(curr_x - start_x, curr_y - start_y)
+
+        self.get_logger().info(
+            f"Moving forward | Distance traveled: {distance_traveled:.2f} / {distance_m:.2f}"
+        )
+
+        # 3. Stop condition
+        if distance_traveled >= distance_m:
+            self.get_logger().info("Finished moving forward 2 meters!")
+
+            # Reset the start pose in case you ever want to use this function again
+            self.move_start_pose = None
+
+            # Transition to your next state
+            self.state = State.DONE
+            return self.make_cmd_vel(0.0, 0.0)
+
+        return self.make_cmd_vel(0.3, 0.0)
+
     def go_to_wall(self):
         fl = self.tof["fl"]
         fr = self.tof["fr"]
@@ -231,8 +268,7 @@ class ControllerNode(Node):
             return self.turn_in_place(math.pi)
 
         if self.state == State.MOVING_2M_AWAY:
-            # For now we stay still
-            return self.make_cmd_vel(0.0, 0.0)
+            return self.move_forward_distance(2.0)
 
         if self.state == State.DONE:
             return self.make_cmd_vel(0.0, 0.0)
