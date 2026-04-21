@@ -1,11 +1,13 @@
 import rclpy
+import rclpy.logging
 from rclpy.node import Node
 from transforms3d._gohlketransforms import euler_from_quaternion
 
-from geometry_msgs.msg import Twist, Pose
+from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 
 import sys
+import math
 
 
 class ControllerNode(Node):
@@ -16,32 +18,34 @@ class ControllerNode(Node):
         self.odom_pose = None
         self.odom_velocity = None
 
+        # Open-loop figure-eight parameters
+        self.linear_speed = 0.3  # [m/s]
+        self.angular_frequency = 0.1  # [Hz]
+
+        # angular speed in rad/s
+        self.angular_speed = 2.0 * math.pi * self.angular_frequency
+
+        self.start_time_s = None
+
         # Create a publisher for the topic 'cmd_vel'
         self.vel_publisher = self.create_publisher(Twist, "cmd_vel", 10)
 
-        # Create a subscriber to the topic 'odom', which will call
-        # self.odom_callback every time a message is received
+        # Create a subscriber to the topic 'odom'
         self.odom_subscriber = self.create_subscription(
             Odometry, "odom", self.odom_callback, 10
         )
 
-        # NOTE: we're using relative names to specify the topics (i.e., without a
-        # leading /). ROS resolves relative names by concatenating them with the
-        # namespace in which this node has been started, thus allowing us to
-        # specify which RoboMaster should be controlled.
-
     def start(self):
-        # Create and immediately start a timer that will regularly publish commands
+        self.start_time_s = self.get_clock().now().nanoseconds * 1e-9
         self.timer = self.create_timer(1 / 60, self.update_callback)
 
     def stop(self):
-        # Set all velocities to zero
         cmd_vel = Twist()
         self.vel_publisher.publish(cmd_vel)
 
     def odom_callback(self, msg):
         self.odom_pose = msg.pose.pose
-        self.odom_valocity = msg.twist.twist
+        self.odom_velocity = msg.twist.twist
 
         pose2d = self.pose3d_to_2d(self.odom_pose)
 
@@ -49,7 +53,7 @@ class ControllerNode(Node):
             "odometry: received pose (x: {:.2f}, y: {:.2f}, theta: {:.2f})".format(
                 *pose2d
             ),
-            throttle_duration_sec=0.5,  # Throttle logging frequency to max 2Hz
+            throttle_duration_sec=0.5,
         )
 
     def pose3d_to_2d(self, pose3):
@@ -63,38 +67,49 @@ class ControllerNode(Node):
         roll, pitch, yaw = euler_from_quaternion(quaternion)
 
         pose2 = (
-            pose3.position.x,  # x position
-            pose3.position.y,  # y position
-            yaw,  # theta orientation
+            pose3.position.x,
+            pose3.position.y,
+            yaw,
         )
 
         return pose2
 
     def update_callback(self):
-        # Let's just set some hard-coded velocities in this example
-        cmd_vel = Twist()
-        cmd_vel.linear.x = 0.2  # [m/s]
-        cmd_vel.angular.z = 0.0  # [rad/s]
-
-        # Publish the command
+        cmd_vel = self.move_as_eight()
         self.vel_publisher.publish(cmd_vel)
+
+    def move_as_eight(self):
+        cmd_vel = Twist()
+        cmd_vel.linear.x = self.linear_speed
+
+        current_time_s = self.get_clock().now().nanoseconds * 1e-9
+        elapsed_time_s = current_time_s - self.start_time_s
+
+        # Time needed to complete one full circle
+        circle_period_s = 1.0 / self.angular_frequency
+
+        # Alternate direction every circle
+        circle_count = int(elapsed_time_s // circle_period_s)
+
+        if circle_count % 2 == 0:
+            cmd_vel.angular.z = self.angular_speed
+        else:
+            cmd_vel.angular.z = -self.angular_speed
+
+        return cmd_vel
 
 
 def main():
-    # Initialize the ROS client library
     rclpy.init(args=sys.argv)
 
-    # Create an instance of your node class
     node = ControllerNode()
     node.start()
 
-    # Keep processings events until someone manually shuts down the node
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
 
-    # Ensure the RoboMaster is stopped before exiting
     node.stop()
 
 
