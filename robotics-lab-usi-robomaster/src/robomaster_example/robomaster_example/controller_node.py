@@ -6,9 +6,17 @@ from transforms3d._gohlketransforms import euler_from_quaternion
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Range
+from enum import Enum
 
 import sys
 import math
+
+
+class State(Enum):
+    SEARCHING_WALL = 1  # When the robot goes forward fast looking for a wall
+    APPROACHING_WALL = 2  # Spotted a wall, we approach slowly
+    CENTERING_WALL = 3  # Reached the wall, we rotate to center it
+    DONE_CENTERED_FORWARD = 4  # Wall is centered, we stop
 
 
 class ControllerNode(Node):
@@ -23,8 +31,8 @@ class ControllerNode(Node):
         self.min_dist_from_wall = (
             0.2  # [m] minimum distance from the wall to consider it as "close enough"
         )
-        self.centered_w_wall = False
-        self.centering_w_wall = False
+
+        self.state = State.SEARCHING_WALL
 
         # Open-loop figure-eight parameters
         self.linear_speed = 0.3  # [m/s]
@@ -94,89 +102,80 @@ class ControllerNode(Node):
         #     throttle_duration_sec=0.5,
         # )
 
-    def go_to_wall(self):
-        # This method uses the ToF sensors to go straight until it detects a change in the distance values
-        # Ones it finds it it goes forward until a certain point,
-        # then it centers itself with the wall by rotating until the front sensors are approx the same distance
-        if self.tof["fl"] is not None and self.tof["fr"] is not None:
-            self.get_logger().debug(
-                "ToF sensor data: fl: {:.2f}, fr: {:.2f}".format(
-                    self.tof["fl"], self.tof["fr"]
-                )
-            )
-            if self.tof["fl"] >= self.tof_max and self.tof["fr"] >= self.tof_max:
-                # No wall in sight, we just go fast forward, no rotation
-                self.get_logger().info("No wall in sight, going forward...")
-                cmd_vel = Twist()
-                cmd_vel.linear.x = 0.5
-                cmd_vel.angular.z = 0.0
-                return cmd_vel
-            elif (
-                self.tof["fl"] <= self.min_dist_from_wall
-                or self.tof["fr"] <= self.min_dist_from_wall
-                or self.centering_w_wall
-            ):
-                # We are close enough to the wall, we stop
-                self.centering_w_wall = True
-                self.get_logger().info("Reached the wall, stopping...")
-                if (
-                    self.tof["fl"] < self.tof_max
-                    and self.tof["fr"] < self.tof_max
-                    and math.isclose(self.tof["fl"], self.tof["fr"], abs_tol=0.03)
-                ):
-                    self.centered_w_wall = True
-                    self.get_logger().info("Wall is centered, stopping...")
-                    cmd_vel = Twist()
-                    cmd_vel.linear.x = 0.0
-                    cmd_vel.angular.z = 0.0
-                    return cmd_vel
-                else:
-                    side = 1 if self.tof["fl"] < self.tof["fr"] else -1
-                    cmd_vel = Twist()
-                    cmd_vel.linear.x = 0.0
-                    cmd_vel.angular.z = side * 0.1
-                    self.get_logger().info(
-                        "Wall is not centered, rotating {}... | Difference of {:.2f}".format(
-                            "left" if side == 1 else "right",
-                            abs(self.tof["fl"] - self.tof["fr"]),
-                        )
-                    )
-                    self.get_logger().info(
-                        f"Rotating | Distance from wall: fl: {self.tof['fl']:.2f}, fr: {self.tof['fr']:.2f}"
-                    )
-                    return cmd_vel
-
-                # cmd_vel = Twist()
-                # cmd_vel.linear.x = 0.0
-                # cmd_vel.angular.z = 0.0
-                # return cmd_vel
-            elif not self.centering_w_wall and (
-                self.tof["fl"] < self.tof_max or self.tof["fr"] < self.tof_max
-            ):
-                # We see a wall form one of the sensors, we approach slowly
-                self.get_logger().info("Spotted a wall, Approaching...")
-                self.get_logger().info(
-                    f"Approaching | Distance from wall: fl: {self.tof['fl']:.2f}, fr: {self.tof['fr']:.2f}"
-                )
-                cmd_vel = Twist()
-                cmd_vel.linear.x = 0.2
-                cmd_vel.angular.z = 0.0
-                return cmd_vel
-        else:
-            self.get_logger().info("Waiting for ToF sensor data...")
-            cmd_vel = Twist()
-            cmd_vel.linear.x = 0.0
-            cmd_vel.angular.z = 0.0
-            return cmd_vel
-
-        self.get_logger().info("Not possible to get here...")
-        self.get_logger().info(
-            "tof_fl: {}, tof_fr: {}".format(self.tof["fl"], self.tof["fr"])
-        )
+    def make_cmd_vel(self, linear_x: float, angular_z: float) -> Twist:
         cmd_vel = Twist()
-        cmd_vel.linear.x = 0.0
-        cmd_vel.angular.z = 0.0
+        cmd_vel.linear.x = linear_x
+        cmd_vel.angular.z = angular_z
         return cmd_vel
+
+    def tof_sees_something(self, value: float) -> bool:
+        return value is not None and value < self.tof_max
+
+    def search_or_approach_wall(self, fl, fr):
+        """
+        This method is used when we are in the SEARCHING_WALL state, it checks the ToF sensor values to decide if we are still searching for a wall or if we have spotted one and we need to approach it
+        """
+        fl_seen = self.tof_sees_something(fl)
+        fr_seen = self.tof_sees_something(fr)
+
+        if not fl_seen and not fr_seen:
+            self.get_logger().info("No wall in sight, going forward...")
+            return self.make_cmd_vel(0.5, 0.0)
+
+        if (fl is not None and fl <= self.min_dist_from_wall) or (
+            fr is not None and fr <= self.min_dist_from_wall
+        ):
+            self.state = State.CENTERING_WALL
+            self.get_logger().info("Reached the wall, starting centering...")
+            return self.make_cmd_vel(0.0, 0.0)
+
+        self.get_logger().info(
+            f"Approaching | Distance from wall: fl: {fl:.2f}, fr: {fr:.2f}"
+        )
+
+        return self.make_cmd_vel(0.2, 0.0)
+
+    def center_with_wall(self, fl, fr):
+        if (
+            self.tof_sees_something(fl)
+            and self.tof_sees_something(fr)
+            and math.isclose(fl, fr, abs_tol=0.01)
+        ):
+            self.state = State.DONE_CENTERED_FORWARD
+            self.get_logger().info("Wall is centered, stopping...")
+            return self.make_cmd_vel(0.0, 0.0)
+
+        side = 1 if fl < fr else -1
+        self.get_logger().info(
+            "Centering | rotating {} | fl: {:.2f}, fr: {:.2f}, diff: {:.2f}".format(
+                "left" if side == 1 else "right",
+                fl,
+                fr,
+                abs(fl - fr),
+            )
+        )
+
+        return self.make_cmd_vel(0.0, side * 0.1)
+
+    def go_to_wall(self):
+        fl = self.tof["fl"]
+        fr = self.tof["fr"]
+
+        if fl is None or fr is None:
+            self.get_logger().info("Waiting for ToF sensor data...")
+            return self.make_cmd_vel(0.0, 0.0)
+
+        if self.state == State.SEARCHING_WALL:
+            return self.search_or_approach_wall(fl, fr)
+
+        if self.state == State.CENTERING_WALL:
+            return self.center_with_wall(fl, fr)
+
+        if self.state == State.DONE_CENTERED_FORWARD:
+            return self.make_cmd_vel(0.0, 0.0)
+
+        self.get_logger().warn(f"Unknown wall state: {self.state}")
+        return self.make_cmd_vel(0.0, 0.0)
 
     def pose3d_to_2d(self, pose3):
         quaternion = (
